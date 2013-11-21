@@ -68,11 +68,13 @@ var fishy = cuttlefish({
 
 }, cb) // optional cb arg gets registered as 'complete' event handler
 
-fishy.on('file', function(filename, error) {
-  if (error)
-    console.error('%s failed: %s', filename, error.stack)
+fishy.on('file', function(status, file, data) {
+  if (status === 'error')
+    console.error('%s failed: %s', file.name, data.stack)
+  else if (status === 'match')
+    console.error('%s already there', file.name)
   else
-    console.error('%s ok!', filename)
+    console.error('%s ok!', file.name)
 })
 
 fishy.on('complete', function(error, data) {
