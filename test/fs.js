@@ -38,6 +38,14 @@ var expectsum = {
   'dir/f': 'morZLFDK45qixWBP0KttjA=='
 }
 
+var filesMd5 = Object.keys(files).reduce(function(set, f) {
+  var o = {}
+  for (var i in files[f]) o[i] = files[f][i]
+  o.md5 = expectsum[f]
+  set[f] = o
+  return set
+}, {})
+
 test('preclean', function(t) {
   client.rmr(mpath, function(er) {
     t.pass('cleaned')
@@ -45,7 +53,7 @@ test('preclean', function(t) {
   })
 })
 
-test('fs first sync', function(t) {
+test('fs first sync, no checksums', function(t) {
   var cf = cuttlefish({
     files: files,
     path: mpath,
@@ -53,6 +61,7 @@ test('fs first sync', function(t) {
     headers: {
       'access-control-allow-methods': 'GET'
     },
+    delete: true,
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
@@ -62,9 +71,7 @@ test('fs first sync', function(t) {
   cf.on('file', function(file, status, data) {
     t.equal(status, 'sent')
   })
-  cf.on('complete', function(er, results) {
-    if (er)
-      throw er
+  cf.on('complete', function(results) {
     var res = Object.keys(results).sort().map(function(f) {
       return [f, results[f]['computed-md5']]
     }).reduce(function (set, kv) {
@@ -76,7 +83,11 @@ test('fs first sync', function(t) {
   })
 })
 
-test('fs second sync', function(t) {
+test('fs second sync, no checksums', function(t) {
+  var expectStatus = Object.keys(expectsum).reduce(function(set, k) {
+    set[k] = 'match'
+    return set
+  }, {})
   var cf = cuttlefish({
     files: files,
     path: mpath,
@@ -93,13 +104,38 @@ test('fs second sync', function(t) {
   cf.on('file', function(file, status, data) {
     t.equal(status, 'match')
   })
-  cf.on('complete', function(er, results) {
-    if (er)
-      throw er
-    var res = Object.keys(results).sort().map(function(f) {
-      return [f, results[f].md5]
-    }).reduce(function (set, kv) {
-      set[kv[0]] = kv[1]
+  cf.on('complete', function(results) {
+    var res = Object.keys(results).sort().reduce(function(set, f) {
+      set[f] = results[f].status
+      return set
+    }, {})
+    t.same(res, expectStatus)
+    t.end()
+  })
+})
+
+test('fs second sync, with checksums', function(t) {
+  var cf = cuttlefish({
+    files: filesMd5,
+    path: mpath,
+    client: client,
+    headers: {
+      'access-control-allow-methods': 'GET'
+    },
+    request: function(file, cb) {
+      var f = path.resolve(__dirname, 'fixtures', file.name)
+      cb(null, fs.createReadStream(f))
+    },
+    strict: true
+  })
+
+  cf.on('file', function(file, status, data) {
+    t.equal(status, 'match')
+  })
+
+  cf.on('complete', function(results) {
+    var res = Object.keys(results).sort().reduce(function(set, f) {
+      set[f] = results[f].md5 || results[f]['computed-md5']
       return set
     }, {})
     t.same(res, expectsum)
@@ -125,22 +161,31 @@ test('fs partial sync', function(t) {
       },
       strict: true
     })
+
     cf.on('file', function(file, status, data) {
       if (file.name.match(/^dir/))
         t.equal(status, 'sent')
       else
         t.equal(status, 'match')
     })
-    cf.on('complete', function(er, results) {
-      if (er)
-        throw er
+
+    cf.on('complete', function(results) {
+      var expect = Object.keys(expectsum).sort().reduce(function(set, f) {
+        if (f.match(/^dir/))
+          set[f] = expectsum[f]
+        else
+          set[f] = 'match'
+        return set
+      }, {})
+
       var res = Object.keys(results).sort().map(function(f) {
-        return [f, results[f].md5 || results[f]['computed-md5']]
+        return [f, results[f].md5 || results[f].status]
       }).reduce(function (set, kv) {
         set[kv[0]] = kv[1]
         return set
       }, {})
-      t.same(res, expectsum)
+
+      t.same(res, expect)
       t.end()
     })
   })
@@ -149,13 +194,24 @@ test('fs partial sync', function(t) {
 test('fs delete extra', function(t) {
   delete files['dir/a']
   delete files.a
+  delete filesMd5['dir/a']
+  delete filesMd5.a
   delete expectsum['dir/a']
   delete expectsum.a
 
   var deletedExpect = [ 'a', 'dir/a' ]
 
+  var expect = Object.keys(expectsum).map(function(f) {
+    return [f, expectsum[f]]
+  }).concat(deletedExpect.map(function(f) {
+    return [f, 'delete']
+  })).reduce(function(set, kv) {
+    set[kv[0]] = kv[1]
+    return set
+  }, {})
+
   var cf = cuttlefish({
-    files: files,
+    files: filesMd5,
     path: mpath,
     client: client,
     headers: {
@@ -173,30 +229,20 @@ test('fs delete extra', function(t) {
     t.equal(status, 'match')
   })
 
-  var sawDeleteStart = false
-  cf.on('deleteStart', function(files) {
-    sawDeleteStart = true
-    files = files.sort()
-    t.same(files, deletedExpect)
-  })
-
   var deleted = []
   cf.on('delete', function(f) {
     deleted.push(f)
   })
 
-  cf.on('complete', function(er, results) {
-    if (er)
-      throw er
-    t.ok(sawDeleteStart, 'did delete')
+  cf.on('complete', function(results) {
     t.same(deleted.sort(), deletedExpect, 'deleted the right files')
-    var res = Object.keys(results).sort().map(function(f) {
-      return [f, results[f].md5]
-    }).reduce(function (set, kv) {
-      set[kv[0]] = kv[1]
+
+    var res = Object.keys(results).sort().reduce(function(set, f) {
+      set[f] = results[f].md5 || results[f].status
       return set
     }, {})
-    t.same(res, expectsum)
+
+    t.same(res, expect)
     t.end()
   })
 })
@@ -224,23 +270,12 @@ test('fs only delete extra', function(t) {
     strict: true
   })
 
-  var sawDeleteStart = false
-  cf.on('deleteStart', function(files) {
-    sawDeleteStart = true
-    files = files.sort()
-    t.same(files, deletedExpect)
-  })
-
   var deleted = []
   cf.on('delete', function(f) {
     deleted.push(f)
   })
 
-  cf.on('complete', function(er, results) {
-    console.error('only delete complete', results)
-    if (er)
-      throw er
-    t.ok(sawDeleteStart, 'did delete')
+  cf.on('complete', function(results) {
     t.same(deleted.sort(), deletedExpect, 'deleted the right files')
     t.end()
   })
