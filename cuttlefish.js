@@ -35,7 +35,8 @@ function Cuttlefish(options, cb) {
   if (!options.request || typeof options.request !== 'function')
     throw new TypeError('options.request function required')
 
-  this._files = canonize(options.files)
+  this._headers = options.headers || {}
+  this._files = canonize(options.files, this._headers)
   this._strict = !!options.strict
   this._onlyDelete = !!options.onlyDelete
   this._delete = !!options.delete || this._onlyDelete
@@ -280,9 +281,9 @@ File.prototype.type = null
 File.prototype.name = null
 File.prototype.error = null
 
-function canonize(files) {
+function canonize(files, headers) {
   return Object.keys(files).map(function(fname) {
-    return new File(fname, files[fname])
+    return new File(fname, files[fname], headers)
   }).reduce(function(set, o) {
     set[o] = o
     return set

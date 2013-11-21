@@ -16,8 +16,9 @@ var files = names.map(function(n) {
 })).reduce(function(set, kv) {
   set[kv[0]] = kv[1]
   kv[1].headers = {
-    'x-cuttlefish-filename': kv[0]
+    'access-control-allow-origin': '*'
   }
+  kv[1].type = 'text/plain'
   return set
 }, {})
 
@@ -50,7 +51,7 @@ test('fs first sync', function(t) {
     path: mpath,
     client: client,
     headers: {
-      'x-tEsTiNg': 'true'
+      'access-control-allow-methods': 'GET'
     },
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
@@ -81,7 +82,7 @@ test('fs second sync', function(t) {
     path: mpath,
     client: client,
     headers: {
-      'x-tEsTiNg': 'true'
+      'access-control-allow-methods': 'GET'
     },
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
@@ -116,7 +117,7 @@ test('fs partial sync', function(t) {
       path: mpath,
       client: client,
       headers: {
-        'x-tEsTiNg': 'true'
+        'access-control-allow-methods': 'GET'
       },
       request: function(file, cb) {
         var f = path.resolve(__dirname, 'fixtures', file.name)
@@ -158,7 +159,7 @@ test('fs delete extra', function(t) {
     path: mpath,
     client: client,
     headers: {
-      'x-tEsTiNg': 'true'
+      'access-control-allow-methods': 'GET'
     },
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
@@ -214,7 +215,7 @@ test('fs only delete extra', function(t) {
     path: mpath,
     client: client,
     headers: {
-      'x-tEsTiNg': 'true'
+      'access-control-allow-methods': 'GET'
     },
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
@@ -241,6 +242,15 @@ test('fs only delete extra', function(t) {
       throw er
     t.ok(sawDeleteStart, 'did delete')
     t.same(deleted.sort(), deletedExpect, 'deleted the right files')
+    t.end()
+  })
+})
+
+// make sure that we got the right headers
+test('custom headers', function(t) {
+  client.info(mpath + '/f', function(er, res) {
+    t.equal(res.headers['access-control-allow-origin'], '*')
+    t.equal(res.headers['access-control-allow-methods'], 'GET')
     t.end()
   })
 })
