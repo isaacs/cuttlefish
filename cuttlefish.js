@@ -35,6 +35,11 @@ function Cuttlefish(options, cb) {
   if (!options.request || typeof options.request !== 'function')
     throw new TypeError('options.request function required')
 
+  if (options.concurrency &&
+      (typeof options.concurrency !== 'number' || options.concurrency < 0))
+    throw new TypeError('options.concurrency must be number > 0')
+
+  this._concurrency = options.concurrency || Infinity
   this._headers = options.headers || {}
   this._files = canonize(options.files, this._headers)
   this._strict = !!options.strict
@@ -64,7 +69,10 @@ Cuttlefish.prototype._deleteExtras = function deleteExtras() {
 
   this.emit('deleteWalk')
 
-  this._client.ftw(this._path, {}, this._onDeleteWalk.bind(this))
+  var opt = {
+    parallel: this._concurrency
+  }
+  this._client.ftw(this._path, opt, this._onDeleteWalk.bind(this))
 }
 
 Cuttlefish.prototype._onDeleteWalk = function onDeleteWalk(er, res) {
