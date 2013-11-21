@@ -3,6 +3,7 @@ module.exports = Cuttlefish
 var manta = require('manta')
 var EE = require('events').EventEmitter
 var util = require('util')
+var assert = require('assert')
 
 var debug
 if (util.debuglog)
@@ -36,10 +37,14 @@ function Cuttlefish(options, cb) {
 
   this._files = canonize(options.files)
   this._strict = !!options.strict
-  this._delete = !!options.delete
+  this._onlyDelete = !!options.onlyDelete
+  this._delete = !!options.delete || this._onlyDelete
+  this._deleteFiles = []
   this._request = options.request
   this._client = options.client
-  this._path = options.path.replace(/\/+$/, '')
+  this._path = options.path
+    .replace(/\/+$/, '')
+    .replace(/^~~/, '/' + this._client.user)
   this._names = Object.keys(this._files)
   this._remaining = this._names.length
   this._results = {}
@@ -51,9 +56,68 @@ function Cuttlefish(options, cb) {
   this._sync()
 }
 
+Cuttlefish.prototype._deleteExtras = function deleteExtras() {
+  // only delete once!
+  assert(this._delete)
+  this._delete = false
+
+  this.emit('deleteWalk')
+
+  this._client.ftw(this._path, {}, this._onDeleteWalk.bind(this))
+}
+
+Cuttlefish.prototype._onDeleteWalk = function onDeleteWalk(er, res) {
+  if (er)
+    return this.emit('error', er)
+  res.on('entry', this._onDeleteWalkEntry.bind(this))
+  res.on('end', this._onDeleteWalkEnd.bind(this))
+}
+
+Cuttlefish.prototype._onDeleteWalkEntry = function onDeleteWalkEntry(d) {
+  if (d.type !== 'object')
+    return;
+
+  // check if there's a file by that name.
+  var f = d.parent + '/' + d.name
+  f = f.substr(this._path.length + 1)
+
+  if (!this._files[f]) {
+    this._deleteFiles.push(f)
+    this.emit('deleteAdd', f)
+  }
+}
+
+Cuttlefish.prototype._onDeleteWalkEnd = function onDeleteWalkEnd() {
+  if (!this._deleteFiles.length)
+    this._done()
+  else
+    this._deleteStart()
+}
+
+Cuttlefish.prototype._deleteStart = function deleteStart() {
+  this.emit('deleteStart', this._deleteFiles)
+  this._remaining = this._deleteFiles.length
+  this._deleteFiles.forEach(this._deleteFile, this)
+}
+
+Cuttlefish.prototype._deleteFile = function deleteFile(f) {
+  var d = this._path + '/' + f
+  this._client.unlink(d, {}, this._onDelete.bind(this, f))
+}
+
+Cuttlefish.prototype._onDelete = function onDelete(f, er, res) {
+  debug('delete', f, er)
+  if (er)
+    this._error(f, er)
+  else {
+    this.emit('delete', f)
+    this._maybeDone()
+  }
+}
+
 Cuttlefish.prototype._sync = function sync() {
   debug('start sync', this._names)
-  if (this._names.length === 0)
+  if (this._names.length === 0 || this._onlyDelete)
     return process.nextTick(this._done.bind(this))
 
   this._names.forEach(function(f) {
@@ -116,7 +180,10 @@ Cuttlefish.prototype._maybeDone = function() {
 
 Cuttlefish.prototype._done = function() {
   debug('done!')
-  this.emit('complete', this._firstError, this._results)
+  if (this._delete)
+    this._deleteExtras()
+  else
+    this.emit('complete', this._firstError, this._results)
 }
 
 Cuttlefish.prototype._sendFile = function(file) {

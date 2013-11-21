@@ -64,8 +64,11 @@ var fishy = cuttlefish({
   // Optionally emit an 'error' event on any errors. Note that this
   // will cause it to throw, which might not be what you want.
   // Default: strict=false
-  strict: true
+  strict: true,
 
+  // Optionally delete files that are not in the list
+  // Default: delete=false
+  delete: true
 }, cb) // optional cb arg gets registered as 'complete' event handler
 
 fishy.on('file', function(status, file, data) {

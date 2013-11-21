@@ -53,7 +53,6 @@ test('fs first sync', function(t) {
       'x-tEsTiNg': 'true'
     },
     request: function(file, cb) {
-      console.error('request(%s)', file)
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
     },
@@ -85,7 +84,6 @@ test('fs second sync', function(t) {
       'x-tEsTiNg': 'true'
     },
     request: function(file, cb) {
-      console.error('request(%s)', file)
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
     },
@@ -93,12 +91,10 @@ test('fs second sync', function(t) {
   })
   cf.on('file', function(file, status, data) {
     t.equal(status, 'match')
-    console.error('FILE EVENT %j', status, file)
   })
   cf.on('complete', function(er, results) {
     if (er)
       throw er
-    console.error('RESULTS', results)
     var res = Object.keys(results).sort().map(function(f) {
       return [f, results[f].md5]
     }).reduce(function (set, kv) {
@@ -123,7 +119,6 @@ test('fs partial sync', function(t) {
         'x-tEsTiNg': 'true'
       },
       request: function(file, cb) {
-        console.error('request(%s)', file)
         var f = path.resolve(__dirname, 'fixtures', file.name)
         cb(null, fs.createReadStream(f))
       },
@@ -147,6 +142,106 @@ test('fs partial sync', function(t) {
       t.same(res, expectsum)
       t.end()
     })
+  })
+})
+
+test('fs delete extra', function(t) {
+  delete files['dir/a']
+  delete files.a
+  delete expectsum['dir/a']
+  delete expectsum.a
+
+  var deletedExpect = [ 'a', 'dir/a' ]
+
+  var cf = cuttlefish({
+    files: files,
+    path: mpath,
+    client: client,
+    headers: {
+      'x-tEsTiNg': 'true'
+    },
+    request: function(file, cb) {
+      var f = path.resolve(__dirname, 'fixtures', file.name)
+      cb(null, fs.createReadStream(f))
+    },
+    strict: true,
+    delete: true
+  })
+
+  cf.on('file', function(file, status, data) {
+    t.equal(status, 'match')
+  })
+
+  var sawDeleteStart = false
+  cf.on('deleteStart', function(files) {
+    sawDeleteStart = true
+    files = files.sort()
+    t.same(files, deletedExpect)
+  })
+
+  var deleted = []
+  cf.on('delete', function(f) {
+    deleted.push(f)
+  })
+
+  cf.on('complete', function(er, results) {
+    if (er)
+      throw er
+    t.ok(sawDeleteStart, 'did delete')
+    t.same(deleted.sort(), deletedExpect, 'deleted the right files')
+    var res = Object.keys(results).sort().map(function(f) {
+      return [f, results[f].md5]
+    }).reduce(function (set, kv) {
+      set[kv[0]] = kv[1]
+      return set
+    }, {})
+    t.same(res, expectsum)
+    t.end()
+  })
+})
+
+test('fs only delete extra', function(t) {
+  delete files['dir/b']
+  delete files.b
+  delete expectsum['dir/b']
+  delete expectsum.b
+
+  var deletedExpect = [ 'b', 'dir/b' ]
+
+  var cf = cuttlefish({
+    onlyDelete: true,
+    files: files,
+    path: mpath,
+    client: client,
+    headers: {
+      'x-tEsTiNg': 'true'
+    },
+    request: function(file, cb) {
+      var f = path.resolve(__dirname, 'fixtures', file.name)
+      cb(null, fs.createReadStream(f))
+    },
+    strict: true
+  })
+
+  var sawDeleteStart = false
+  cf.on('deleteStart', function(files) {
+    sawDeleteStart = true
+    files = files.sort()
+    t.same(files, deletedExpect)
+  })
+
+  var deleted = []
+  cf.on('delete', function(f) {
+    deleted.push(f)
+  })
+
+  cf.on('complete', function(er, results) {
+    console.error('only delete complete', results)
+    if (er)
+      throw er
+    t.ok(sawDeleteStart, 'did delete')
+    t.same(deleted.sort(), deletedExpect, 'deleted the right files')
+    t.end()
   })
 })
 
