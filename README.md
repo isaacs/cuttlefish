@@ -61,10 +61,6 @@ var fishy = cuttlefish({
     'access-control-allow-methods': 'GET'
   },
 
-  // Optionally set this flag to delete remote files that are not
-  // in the `files` set.
-  "delete": true, // default = no deletes
-
   // Optionally emit an 'error' event on any errors. Note that this
   // will cause it to throw, which might not be what you want.
   // Default: strict=false
