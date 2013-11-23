@@ -145,6 +145,8 @@ fishy.on('complete', function(error, data) {
   md5 values only when necessary.  This is handy if you have large
   files, and don't want to look up md5 checksums unless necessary
   because the file lengths match.
+* `timingDebug` {Boolean} Optionally dump a bunch of timing info to
+  stderr.  Defaults to false, obviously.
 
 ## File Objects
 

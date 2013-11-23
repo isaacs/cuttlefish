@@ -23,6 +23,9 @@ function Cuttlefish(options, cb) {
   if (!options || typeof options !== 'object')
     throw new TypeError('options object required')
 
+  this._timingDebug = options.timingDebug
+  this._timingStart = this._timingDebug ? process.hrtime() : null
+
   if (!options.files || typeof options.files !== 'object')
     throw new TypeError('options.files object required')
 
@@ -71,6 +74,7 @@ function Cuttlefish(options, cb) {
   if (typeof cb === 'function')
     this.on('complete', cb)
 
+  this._timing('start')
   this._sync()
 }
 
@@ -82,6 +86,7 @@ Cuttlefish.prototype._process = function process() {
     var task = this._tasks.shift()
     if (task) {
       this._processing++
+      this._timing('task %d %s', task.id, task.name)
       this.emit('task', task)
       task.fn(this._afterProcess.bind(this, task))
     } else if (this._tasksDone && this._processing === 0)
@@ -101,6 +106,8 @@ Cuttlefish.prototype._pushTask = function pushTask(task) {
     task.file.started = true
   task.id = taskId++
 
+  this._timing('pushTask %d %s', task.id, task.name)
+
   this._inFlight[task.id] = task
   if (this._timeout > 0) {
     task.timer = setTimeout(taskTimeout.bind(this, task), this._timeout)
@@ -119,6 +126,7 @@ function taskTimeout(task) {
 }
 
 Cuttlefish.prototype._tasksEnd = function tasksEnd() {
+  this._timing('tasksEnd')
   debug('tasksEnd')
   assert(!this._tasksDone)
   this._tasksDone = true
@@ -127,6 +135,7 @@ Cuttlefish.prototype._tasksEnd = function tasksEnd() {
 }
 
 Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
+  this._timing('taskComplete %d %s', task.id, task.name)
   this._processing--
   clearTimeout(task.timer)
   delete this._inFlight[task.id]
@@ -226,6 +235,7 @@ Cuttlefish.prototype._onWalkEntry = function onWalkEntry(d) {
   if (!this._delete && !this._files[d._remote])
     return
 
+  this._timing('walk entry', d._remote)
   d.toString = function() { return this._remote }
   this.emit('entry', d)
   if (d.type === 'directory')
@@ -358,6 +368,7 @@ Cuttlefish.prototype._onInfo = function(task) {
 
 Cuttlefish.prototype._sendUnsent = function sendUnsent() {
   debug('sendUnsent')
+  this._timing('sendUnsent')
   this._names.forEach(sendUnsentForeach, this)
   this._tasksEnd()
 }
@@ -380,6 +391,7 @@ Cuttlefish.prototype._match = function(file, remote) {
 
 Cuttlefish.prototype._done = function() {
   debug('done!')
+  this._timing('done')
   this.emit('complete', this._results)
 }
 
@@ -387,11 +399,13 @@ Cuttlefish.prototype._sendFile = function(file, cb) {
   debug('_sendFile %s', file)
   assert(!this._dryRun)
   // get this file, and then send it once we have it.
+  this._timing('request file', file.name)
   this._request(file, this._onRequest.bind(this, file, cb))
 }
 
 Cuttlefish.prototype._onRequest = function onRequest(file, cb, er, stream) {
   debug('_onRequest %s', file, er || 'ok')
+  this._timing('on request file', file.name)
   assert(!this._dryRun)
   if (er)
     cb(er)
@@ -406,6 +420,16 @@ Cuttlefish.prototype._sendFileStream = function(file, stream, cb) {
   stream.on('error', cb)
   this._client.put(mpath, stream, file, cb)
 }
+
+Cuttlefish.prototype._timing = function() {
+  if (this._timingDebug) {
+    var s = util.format.apply(util, arguments)
+    var el = process.hrtime(this._timingStart)
+    el = (el[0] + el[1] / 1e9).toPrecision(5)
+    console.error('%d %s', el, s)
+  }
+}
+
 
 
 // File class
