@@ -43,6 +43,10 @@ function Cuttlefish(options, cb) {
       (typeof options.timeout !== 'number' || options.timeout <= 0))
     throw new TypeError('options.timeout must be number > 0')
 
+  if (options.getMd5 != null && typeof options.getMd5 !== 'function')
+    throw new TypeError('options.getMd5 must be a function')
+
+  this._getMd5 = options.getMd5
   this._concurrency = options.concurrency || 50
   this._timeout = options.timeout || -1
   this._headers = options.headers || {}
@@ -187,7 +191,6 @@ Cuttlefish.prototype._onWalk = function onWalk(er, res) {
   debug('onWalk', er || 'ok')
 
   if (er && er.statusCode === 404)
-    // Just send the unsent files.  The dir will be made implicitly.
     this._sendUnsent()
   else if (er)
     this.emit('error', er)
@@ -270,12 +273,29 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
         this._match(file, d)
       else
         this._send(file)
+    } else if (this._getMd5) {
+      this._pushTask({
+        name: 'getMd5',
+        fn: this._getMd5.bind(this, file),
+        file: file,
+        after: this._afterGetMd5.bind(this, file, d)
+      })
     } else if (file.size === null) {
       debug('no size, send anyway', file)
       this._send(file)
     } else {
       this._match(file, d)
     }
+  }
+}
+
+Cuttlefish.prototype._afterGetMd5 = function afterGetMd5(file, d, task) {
+  if (task.error)
+    this.emit('error', task.error)
+  else {
+    assert(task.result)
+    task.file.md5 = canonicalMd5(task.result)
+    this._onWalkEntryObject(d)
   }
 }
 
@@ -371,22 +391,25 @@ Cuttlefish.prototype._sendFileStream = function(file, stream, cb) {
 // Because of toString = this.name, it can be used interchangeably
 // as a string key, and also as the object represented by that
 
+function canonicalMd5(md5) {
+  if (md5) {
+    if (Buffer.isBuffer(md5))
+      md5 = md5.toString('base64')
+    else if (md5 && md5.match(/^md5-/))
+      md5 = md5.replace(/^md5-/)
+
+    if (md5.length === 32)
+      md5 = new Buffer(md5, 'hex').toString('base64')
+  }
+  return md5
+}
+
 function File(fname, file, headers) {
-  this.md5 = field(file, [
+  this.md5 = canonicalMd5(field(file, [
     'md5', 'content-md5', 'contentMd5',
     'content_md5', 'digest',
     'computed-md5', 'computedMd5', 'computed_md5'
-  ])
-
-  if (this.md5) {
-    if (Buffer.isBuffer(this.md5))
-      this.md5 = this.md5.toString('base64')
-    else if (this.md5 && this.md5.match(/^md5-/))
-      this.md5 = this.md5.replace(/^md5-/)
-
-    if (this.md5.length === 32)
-      this.md5 = new Buffer(this.md5, 'hex').toString('base64')
-  }
+  ]))
 
   this.size = field(file, [
     'size', 'length', 'content-length',

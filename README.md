@@ -141,6 +141,10 @@ fishy.on('complete', function(error, data) {
   files.  Implies `delete`.  Default = false
 * `dryRun` {Boolean} Don't actually put or delete any files, but act
   as if it would, performing the same length and MD5 comparisons etc.
+* `getMd5` {Function} Optionally provide a getter function to look up
+  md5 values only when necessary.  This is handy if you have large
+  files, and don't want to look up md5 checksums unless necessary
+  because the file lengths match.
 
 ## File Objects
 
