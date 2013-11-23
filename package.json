@@ -21,9 +21,9 @@
     "sync"
   ],
   "author": "Isaac Z. Schlueter <i@izs.me> (http://blog.izs.me/)",
-  "license": "ISC",
   "bugs": {
     "url": "https://github.com/isaacs/cuttlefish/issues"
   },
-  "homepage": "https://github.com/isaacs/cuttlefish"
+  "homepage": "https://github.com/isaacs/cuttlefish",
+  "license": "ISC"
 }
