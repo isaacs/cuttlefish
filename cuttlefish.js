@@ -200,12 +200,13 @@ Cuttlefish.prototype._walk = function walk(path) {
   this._pushTask({
     name: 'walk',
     fn: this._client.ls.bind(this._client, path, { _no_dir_check: true }),
-    after: this._onWalk.bind(this),
+    after: this._onWalk.bind(this, path),
     dry: true
   })
 }
 
-Cuttlefish.prototype._onWalk = function onWalk(task) {
+Cuttlefish.prototype._onWalk = function onWalk(path, task) {
+  debug('onWalk', task)
   var er = task.error
   var res = task.result
   if (er && er.statusCode === 404)
@@ -219,8 +220,15 @@ Cuttlefish.prototype._onWalk = function onWalk(task) {
 Cuttlefish.prototype._onWalkRes = function onWalkRes(res) {
   assert(res)
   res.on('entry', this._onWalkEntry.bind(this))
-  res.on('error', this.emit.bind(this, 'error'))
+  res.on('error', this._onWalkError.bind(this))
   res.on('end', this._onWalkEnd.bind(this))
+}
+
+Cuttlefish.prototype._onWalkError = function(er) {
+  if (er.statusCode === 404 && er.message === this._path + ' was not found')
+    this._sendUnsent()
+  else
+    this.emit('error', er)
 }
 
 Cuttlefish.prototype._onWalkEnd = function onWalkEnd() {
@@ -229,10 +237,10 @@ Cuttlefish.prototype._onWalkEnd = function onWalkEnd() {
 }
 
 Cuttlefish.prototype._onWalkEntry = function onWalkEntry(d) {
-  debug('walk entry', d)
   d._path = d.parent + '/' + d.name
   d._remote = d._path.substr(this._path.length + 1)
-  if (!this._delete && !this._files[d._remote])
+  debug('walk entry', d)
+  if (!this._delete && !this._files[d._remote] && d.type === 'object')
     return
 
   this._timing('walk entry', d._remote)
@@ -240,8 +248,9 @@ Cuttlefish.prototype._onWalkEntry = function onWalkEntry(d) {
   this.emit('entry', d)
   if (d.type === 'directory')
     this._onWalkEntryDir(d)
-  else
+  else if (d.type === 'object')
     this._onWalkEntryObject(d)
+  else throw new Error("wtf")
 }
 
 Cuttlefish.prototype._onWalkEntryDir = function onWalkEntryDir(d) {
