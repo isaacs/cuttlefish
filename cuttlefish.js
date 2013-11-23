@@ -66,6 +66,7 @@ function Cuttlefish(options, cb) {
   this._tasks = []
   this._inFlight = {}
   this._processing = 0
+  this._walks = 0
 
   if (typeof cb === 'function')
     this.on('complete', cb)
@@ -134,19 +135,23 @@ Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
   if (this._dryRun && !task.dry)
     res = task.file
 
-  if (res && res.headers && res.emit) {
+  // Purely informative objects should just show the headers
+  if (res && res.headers && res.statusCode === 204) {
+    debug('task %d:%s respond with headers', task.id, task.name)
     res.headers.statusCode = res.statusCode
     res = res.headers
   }
 
-  if (res['content-length'])
-    res.size = +res['content-length']
+  if (res) {
+    if (res['content-length'])
+      res.size = +res['content-length']
 
-  if (res['content-md5'])
-    res.md5 = res['content-md5']
+    if (res['content-md5'])
+      res.md5 = res['content-md5']
 
-  if (res['computed-md5'])
-    res.md5 = res['computed-md5']
+    if (res['computed-md5'])
+      res.md5 = res['computed-md5']
+  }
 
   task.result = res
   if (er) {
@@ -176,42 +181,56 @@ Cuttlefish.prototype._sync = function sync() {
   if (this._names.length === 0 && !this._delete)
     return process.nextTick(this._done.bind(this))
 
-  this._startWalk()
+  this._walk(this._path)
 }
 
-Cuttlefish.prototype._startWalk = function startWalk() {
-  debug('startWalk', this._path)
-  var opt = {
-    parallel: this._concurrency
-  }
-  this._client.ftw(this._path, opt, this._onWalk.bind(this))
+Cuttlefish.prototype._walk = function walk(path) {
+  this._timing('walk', path)
+  debug('walk', path)
+  this._walks++
+  this._pushTask({
+    name: 'walk',
+    fn: this._client.ls.bind(this._client, path, { _no_dir_check: true }),
+    after: this._onWalk.bind(this),
+    dry: true
+  })
 }
 
-Cuttlefish.prototype._onWalk = function onWalk(er, res) {
-  debug('onWalk', er || 'ok')
-
+Cuttlefish.prototype._onWalk = function onWalk(task) {
+  var er = task.error
+  var res = task.result
   if (er && er.statusCode === 404)
     this._sendUnsent()
   else if (er)
     this.emit('error', er)
-  else {
-    this._walker = res
-    this.emit('ftw', res)
-    res.on('entry', this._onWalkEntry.bind(this))
-    res.on('end', this._sendUnsent.bind(this))
-  }
+  else
+    this._onWalkRes(res)
+}
+
+Cuttlefish.prototype._onWalkRes = function onWalkRes(res) {
+  assert(res)
+  res.on('entry', this._onWalkEntry.bind(this))
+  res.on('error', this.emit.bind(this, 'error'))
+  res.on('end', this._onWalkEnd.bind(this))
+}
+
+Cuttlefish.prototype._onWalkEnd = function onWalkEnd() {
+  if (--this._walks === 0)
+    this._sendUnsent()
 }
 
 Cuttlefish.prototype._onWalkEntry = function onWalkEntry(d) {
-  debug('ftw entry', d)
+  debug('walk entry', d)
   d._path = d.parent + '/' + d.name
   d._remote = d._path.substr(this._path.length + 1)
+  if (!this._delete && !this._files[d._remote])
+    return
+
   d.toString = function() { return this._remote }
   this.emit('entry', d)
-  if (d.type === 'directory') {
-    if (this._delete)
-      this._onWalkEntryDir(d)
-  } else
+  if (d.type === 'directory')
+    this._onWalkEntryDir(d)
+  else
     this._onWalkEntryObject(d)
 }
 
@@ -222,15 +241,17 @@ Cuttlefish.prototype._onWalkEntryDir = function onWalkEntryDir(d) {
   for (var i = 0; i < this._names.length; i++) {
     if (this._names[i].indexOf(d._remote) === 0) {
       debug('dir is ok', d._remote)
-      return // needs to be there
+      this._walk(d._path)
+      return
     }
   }
-  this._pushTask({
-    name: 'rmr',
-    file: d,
-    fn: this._client.rmr.bind(this._client, d._path),
-    after: this._onDelete.bind(this)
-  })
+  if (this._delete)
+    this._pushTask({
+      name: 'rmr',
+      file: d,
+      fn: this._client.rmr.bind(this._client, d._path),
+      after: this._onDelete.bind(this)
+    })
 }
 
 Cuttlefish.prototype._onDelete = function onDelete(task) {
