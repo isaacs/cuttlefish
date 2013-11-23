@@ -29,7 +29,7 @@ function Cuttlefish(options, cb) {
   if (!options.path || typeof options.path !== 'string')
     throw new TypeError('options.path string required')
 
-  if (!options.client || !(options.client instanceof manta.MantaClient))
+  if (!options.client || options.client.constructor.name !== 'MantaClient')
     throw new TypeError('options.client of type MantaClient required')
 
   if (!options.request || typeof options.request !== 'function')
@@ -49,6 +49,7 @@ function Cuttlefish(options, cb) {
   this._files = canonize(options.files, this._headers)
   this._onlyDelete = !!options.onlyDelete
   this._delete = !!options.delete || this._onlyDelete
+  this._dryRun = !!options.dryRun
   this._request = options.request
   this._client = options.client
   this._path = options.path
@@ -89,8 +90,8 @@ Cuttlefish.prototype._pushTask = function pushTask(task) {
   // Either this is a new task, or a continuation of a started file
   assert(!this._tasksDone || (task.file && task.file.started))
   debug('pushTask', task)
-  if (typeof task === 'function')
-    task = { fn: task }
+  if (this._dryRun && !task.dry)
+    task.fn = process.nextTick
   if (task.file)
     task.file.started = true
   task.id = taskId++
@@ -125,6 +126,9 @@ Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
   clearTimeout(task.timer)
   delete this._inFlight[task.id]
   task.error = er
+
+  if (this._dryRun && !task.dry)
+    res = task.file
 
   if (res && res.headers && res.emit) {
     res.headers.statusCode = res.statusCode
@@ -183,7 +187,8 @@ Cuttlefish.prototype._onWalk = function onWalk(er, res) {
   debug('onWalk', er || 'ok')
 
   if (er && er.statusCode === 404)
-    this._client.mkdir(this._path, this._sendUnsent.bind(this))
+    // Just send the unsent files.  The dir will be made implicitly.
+    this._sendUnsent()
   else if (er)
     this.emit('error', er)
   else {
@@ -258,7 +263,8 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
           name: 'info',
           fn: this._client.info.bind(this._client, d._path),
           after: this._onInfo.bind(this),
-          file: file
+          file: file,
+          dry: true
         })
       else if (d.md5 === file.md5)
         this._match(file, d)
@@ -338,12 +344,14 @@ Cuttlefish.prototype._done = function() {
 
 Cuttlefish.prototype._sendFile = function(file, cb) {
   debug('_sendFile %s', file)
+  assert(!this._dryRun)
   // get this file, and then send it once we have it.
   this._request(file, this._onRequest.bind(this, file, cb))
 }
 
 Cuttlefish.prototype._onRequest = function onRequest(file, cb, er, stream) {
   debug('_onRequest %s', file, er || 'ok')
+  assert(!this._dryRun)
   if (er)
     cb(er)
   else
@@ -352,6 +360,7 @@ Cuttlefish.prototype._onRequest = function onRequest(file, cb, er, stream) {
 
 Cuttlefish.prototype._sendFileStream = function(file, stream, cb) {
   debug('_sendFileStream %s', file)
+  assert(!this._dryRun)
   var mpath = this._path + '/' + file
   stream.on('error', cb)
   this._client.put(mpath, stream, file, cb)

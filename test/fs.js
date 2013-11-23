@@ -65,8 +65,7 @@ test('fs first sync, no checksums', function(t) {
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
-    },
-    strict: true
+    }
   })
   cf.on('file', function(file, status, data) {
     t.equal(status, 'sent')
@@ -98,8 +97,7 @@ test('fs second sync, no checksums', function(t) {
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
-    },
-    strict: true
+    }
   })
   cf.on('file', function(file, status, data) {
     t.equal(status, 'match')
@@ -125,8 +123,7 @@ test('fs second sync, with checksums', function(t) {
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
-    },
-    strict: true
+    }
   })
 
   cf.on('file', function(file, status, data) {
@@ -158,8 +155,7 @@ test('fs partial sync', function(t) {
       request: function(file, cb) {
         var f = path.resolve(__dirname, 'fixtures', file.name)
         cb(null, fs.createReadStream(f))
-      },
-      strict: true
+      }
     })
 
     cf.on('file', function(file, status, data) {
@@ -221,7 +217,6 @@ test('fs delete extra', function(t) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
     },
-    strict: true,
     delete: true
   })
 
@@ -247,12 +242,70 @@ test('fs delete extra', function(t) {
   })
 })
 
-test('fs only delete extra', function(t) {
+test('dry-run test', function(t) {
   delete files['dir/b']
   delete files.b
+  delete filesMd5['dir/b']
+  delete filesMd5.b
   delete expectsum['dir/b']
   delete expectsum.b
 
+  // delete a remote one so that we have a dry-run create as well.
+  client.unlink(mpath + '/c', function(er, res) {
+    if (er)
+      throw er
+
+    var cf = cuttlefish({
+      delete: true,
+      dryRun: true,
+      files: files,
+      client: client,
+      request: function(file, cb) {
+        throw new Error('Should not try to load any files: ' + file)
+      },
+      path: mpath
+    })
+
+    var expectMatch = [ 'd', 'e', 'f', 'dir/c', 'dir/d', 'dir/e', 'dir/f' ]
+    var expectSent = [ 'c' ]
+    var expectDeleted = [ 'b', 'dir/b' ]
+
+    var deleted = []
+    cf.on('delete', function(f) {
+      deleted.push(f)
+    })
+
+    var sent = []
+    cf.on('send', function(f) {
+      sent.push(f.name)
+    })
+
+    var match = []
+    cf.on('match', function(f) {
+      match.push(f.name)
+    })
+
+    cf.on('complete', function(results) {
+      t.same(deleted, expectDeleted)
+      t.same(sent, expectSent)
+      t.same(match, expectMatch)
+      // make sure the deleted file is still there.
+      client.info(mpath + '/' + deleted[0], function(er, info) {
+        if (er)
+          throw er
+        t.ok(info)
+        // make sure the sent file is still not there
+        client.info(mpath + '/' + sent[0], function(er, info) {
+          t.ok(er)
+          t.equal(er.statusCode, 404)
+          t.end()
+        })
+      })
+    })
+  })
+})
+
+test('fs only delete extra', function(t) {
   var deletedExpect = [ 'b', 'dir/b' ]
 
   var cf = cuttlefish({
@@ -266,8 +319,7 @@ test('fs only delete extra', function(t) {
     request: function(file, cb) {
       var f = path.resolve(__dirname, 'fixtures', file.name)
       cb(null, fs.createReadStream(f))
-    },
-    strict: true
+    }
   })
 
   var deleted = []
@@ -284,6 +336,8 @@ test('fs only delete extra', function(t) {
 // make sure that we got the right headers
 test('custom headers', function(t) {
   client.info(mpath + '/f', function(er, res) {
+    if (er)
+      throw er
     t.equal(res.headers['access-control-allow-origin'], '*')
     t.equal(res.headers['access-control-allow-methods'], 'GET')
     t.end()

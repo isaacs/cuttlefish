@@ -96,8 +96,12 @@ var fishy = cuttlefish({
 
   // Optionally ONLY delete missing files, but don't send anything
   // implies "delete"
-  onlyDelete: true
-}, cb) // optional cb arg gets registered as 'complete' event handler
+  onlyDelete: true,
+
+  // don't do ANY remote write operations, but act as if we did,
+  // emitting the same events etc.  Default = false
+  dryRun: true
+})
 
 fishy.on('file', function(status, file, data) {
   if (status === 'error')
@@ -135,6 +139,8 @@ fishy.on('complete', function(error, data) {
 * `onlyDelete` {Boolean} Set to true to **only** delete remote files
   that are not found in the `files` hash, but do not send any new
   files.  Implies `delete`.  Default = false
+* `dryRun` {Boolean} Don't actually put or delete any files, but act
+  as if it would, performing the same length and MD5 comparisons etc.
 
 ## File Objects
 
@@ -214,7 +220,7 @@ This is emitted whenever a new async task is scheduled.
 ### `delete`
 
 * `path` {String} The remote path that is deleted (relative to
-  cuttlefish's root manta path)
+  cuttlefish's root path)
 * `remote` {Object} The remote object info
 
 Emitted whenever a remote file or directory is deleted.
