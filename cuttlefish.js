@@ -47,7 +47,6 @@ function Cuttlefish(options, cb) {
   this._timeout = options.timeout || -1
   this._headers = options.headers || {}
   this._files = canonize(options.files, this._headers)
-  this._strict = !!options.strict
   this._onlyDelete = !!options.onlyDelete
   this._delete = !!options.delete || this._onlyDelete
   this._request = options.request
@@ -57,7 +56,6 @@ function Cuttlefish(options, cb) {
     .replace(/^~~/, '/' + this._client.user)
   this._names = Object.keys(this._files)
   this._results = {}
-  this._firstError = null
   this._walker = null
 
   this._tasks = []
@@ -78,7 +76,7 @@ Cuttlefish.prototype._process = function process() {
     var task = this._tasks.shift()
     if (task) {
       this._processing++
-      this.emit(task.name, task.file)
+      this.emit('task', task)
       task.fn(this._afterProcess.bind(this, task))
     } else if (this._tasksDone && this._processing === 0)
       this._done()
@@ -127,8 +125,11 @@ Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
   clearTimeout(task.timer)
   delete this._inFlight[task.id]
   task.error = er
-  if (res && res.headers)
+
+  if (res && res.headers && res.emit) {
+    res.headers.statusCode = res.statusCode
     res = res.headers
+  }
 
   if (res['content-length'])
     res.size = +res['content-length']
@@ -144,6 +145,7 @@ Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
     er.task = task
     if (task.file) {
       task.file.status = 'error'
+      res.status = 'error'
       task.file.error = er
       er.file = task.file
     }
@@ -152,14 +154,9 @@ Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
     else
       this.emit('error', er)
   } else {
-    if (task.file && task.status) {
-      task.file.status = task.status
-      this._results[task.file] = res || task.file
-      this._results[task.file].status = task.status
-      this.emit('file', task.file, task.status, res)
-    }
     if (task.after)
       task.after(task)
+    this.emit(task.name, task.file, task.result)
   }
   this._process()
 }
@@ -191,7 +188,7 @@ Cuttlefish.prototype._onWalk = function onWalk(er, res) {
     this.emit('error', er)
   else {
     this._walker = res
-    this.emit('walkStart', res)
+    this.emit('ftw', res)
     res.on('entry', this._onWalkEntry.bind(this))
     res.on('end', this._sendUnsent.bind(this))
   }
@@ -202,6 +199,7 @@ Cuttlefish.prototype._onWalkEntry = function onWalkEntry(d) {
   d._path = d.parent + '/' + d.name
   d._remote = d._path.substr(this._path.length + 1)
   d.toString = function() { return this._remote }
+  this.emit('entry', d)
   if (d.type === 'directory') {
     if (this._delete)
       this._onWalkEntryDir(d)
@@ -249,24 +247,27 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
         file: d,
         after: this._onDelete.bind(this)
       })
-  } else {
+  } else if (!this._onlyDelete) {
     // either a match, or not
     if (file.size !== null && file.size !== d.size) {
       debug('size mismatch local=%d remote=%d', file.size, d.size)
       this._send(file)
     } else if (file.md5) {
-      debug('have md5, get info', file.md5)
-      this._pushTask({
-        name: 'info',
-        fn: this._client.info.bind(this._client, d._path),
-        after: this._onInfo.bind(this),
-        file: file
-      })
+      if (!d.md5)
+        this._pushTask({
+          name: 'info',
+          fn: this._client.info.bind(this._client, d._path),
+          after: this._onInfo.bind(this),
+          file: file
+        })
+      else if (d.md5 === file.md5)
+        this._match(file, d)
+      else
+        this._send(file)
     } else if (file.size === null) {
       debug('no size, send anyway', file)
       this._send(file)
     } else {
-      debug('match', file, d)
       this._match(file, d)
     }
   }
@@ -275,11 +276,21 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
 Cuttlefish.prototype._send = function(file) {
   debug('send', file)
   this._pushTask({
-    name: 'sendFile',
+    name: 'send',
     fn: this._sendFile.bind(this, file),
     file: file,
-    status: 'sent'
+    after: this._onSend.bind(this)
   })
+}
+
+Cuttlefish.prototype._onSend = function onSend(task) {
+  if (task.error)
+    return this.emit('error', task.error)
+  var file = task.file
+  var res = task.result
+  res.status = file.status = 'sent'
+  this._results[file] = res || task.file
+  this.emit('file', task.file, 'sent', res)
 }
 
 Cuttlefish.prototype._onInfo = function(task) {
@@ -316,12 +327,13 @@ Cuttlefish.prototype._match = function(file, remote) {
   file.started = true
   this._results[file] = remote
   debug('match', file, remote)
+  this.emit('match', file, remote)
   this.emit('file', file, 'match', remote)
 }
 
 Cuttlefish.prototype._done = function() {
   debug('done!')
-  this.emit('complete', this._firstError, this._results)
+  this.emit('complete', this._results)
 }
 
 Cuttlefish.prototype._sendFile = function(file, cb) {
@@ -408,6 +420,7 @@ File.prototype.type = null
 File.prototype.name = null
 File.prototype.error = null
 File.prototype.started = false
+File.prototype.status = null
 
 function canonize(files, headers) {
   return Object.keys(files).map(function(fname) {
