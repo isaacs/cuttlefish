@@ -35,26 +35,34 @@ function Cuttlefish(options, cb) {
   if (!options.request || typeof options.request !== 'function')
     throw new TypeError('options.request function required')
 
-  if (options.concurrency &&
-      (typeof options.concurrency !== 'number' || options.concurrency < 0))
+  if (options.concurrency != null &&
+      (typeof options.concurrency !== 'number' || options.concurrency <= 0))
     throw new TypeError('options.concurrency must be number > 0')
 
-  this._concurrency = options.concurrency || Infinity
+  if (options.timeout != null &&
+      (typeof options.timeout !== 'number' || options.timeout <= 0))
+    throw new TypeError('options.timeout must be number > 0')
+
+  this._concurrency = options.concurrency || 50
+  this._timeout = options.timeout || -1
   this._headers = options.headers || {}
   this._files = canonize(options.files, this._headers)
   this._strict = !!options.strict
   this._onlyDelete = !!options.onlyDelete
   this._delete = !!options.delete || this._onlyDelete
-  this._deleteFiles = []
   this._request = options.request
   this._client = options.client
   this._path = options.path
     .replace(/\/+$/, '')
     .replace(/^~~/, '/' + this._client.user)
   this._names = Object.keys(this._files)
-  this._remaining = this._names.length
   this._results = {}
   this._firstError = null
+  this._walker = null
+
+  this._tasks = []
+  this._inFlight = {}
+  this._processing = 0
 
   if (typeof cb === 'function')
     this.on('complete', cb)
@@ -62,169 +70,280 @@ function Cuttlefish(options, cb) {
   this._sync()
 }
 
-Cuttlefish.prototype._deleteExtras = function deleteExtras() {
-  // only delete once!
-  assert(this._delete)
-  this._delete = false
 
-  this.emit('deleteWalk')
-
-  var opt = {
-    parallel: this._concurrency
-  }
-  this._client.ftw(this._path, opt, this._onDeleteWalk.bind(this))
-}
-
-Cuttlefish.prototype._onDeleteWalk = function onDeleteWalk(er, res) {
-  if (er)
-    return this.emit('error', er)
-  res.on('entry', this._onDeleteWalkEntry.bind(this))
-  res.on('end', this._onDeleteWalkEnd.bind(this))
-}
-
-Cuttlefish.prototype._onDeleteWalkEntry = function onDeleteWalkEntry(d) {
-  if (d.type !== 'object')
-    return;
-
-  // check if there's a file by that name.
-  var f = d.parent + '/' + d.name
-  f = f.substr(this._path.length + 1)
-
-  if (!this._files[f]) {
-    this._deleteFiles.push(f)
-    this.emit('deleteAdd', f)
+Cuttlefish.prototype._process = function process() {
+  debug('process %d(%d) of %d',
+        this._processing, this._concurrency, this._tasks.length)
+  if (this._processing < this._concurrency) {
+    var task = this._tasks.shift()
+    if (task) {
+      this._processing++
+      this.emit(task.name, task.file)
+      task.fn(this._afterProcess.bind(this, task))
+    } else if (this._tasksDone && this._processing === 0)
+      this._done()
   }
 }
 
-Cuttlefish.prototype._onDeleteWalkEnd = function onDeleteWalkEnd() {
-  if (!this._deleteFiles.length)
-    this._done()
-  else
-    this._deleteStart()
-}
+var taskId = 0
+Cuttlefish.prototype._pushTask = function pushTask(task) {
+  assert(task)
+  // Either this is a new task, or a continuation of a started file
+  assert(!this._tasksDone || (task.file && task.file.started))
+  debug('pushTask', task)
+  if (typeof task === 'function')
+    task = { fn: task }
+  if (task.file)
+    task.file.started = true
+  task.id = taskId++
 
-Cuttlefish.prototype._deleteStart = function deleteStart() {
-  this.emit('deleteStart', this._deleteFiles)
-  this._remaining = this._deleteFiles.length
-  this._deleteFiles.forEach(this._deleteFile, this)
-}
-
-Cuttlefish.prototype._deleteFile = function deleteFile(f) {
-  var d = this._path + '/' + f
-  this._client.unlink(d, {}, this._onDelete.bind(this, f))
-}
-
-Cuttlefish.prototype._onDelete = function onDelete(f, er, res) {
-  debug('delete', f, er)
-  if (er)
-    this._error(f, er)
-  else {
-    this.emit('delete', f)
-    this._maybeDone()
+  this._inFlight[task.id] = task
+  if (this._timeout > 0) {
+    task.timer = setTimeout(taskTimeout.bind(this, task), this._timeout)
+    task.timer.unref()
   }
+  this._tasks.push(task)
+  this._process()
+}
+
+function taskTimeout(task) {
+  if (this._inFlight[task.id]) {
+    var er = new Error('timeout')
+    er.task = task
+    this.emit('error', er)
+  }
+}
+
+Cuttlefish.prototype._tasksEnd = function tasksEnd() {
+  debug('tasksEnd')
+  assert(!this._tasksDone)
+  this._tasksDone = true
+  if (this._processing === 0)
+    this._process()
+}
+
+Cuttlefish.prototype._afterProcess = function afterProcess(task, er, res) {
+  this._processing--
+  clearTimeout(task.timer)
+  delete this._inFlight[task.id]
+  task.error = er
+  if (res && res.headers)
+    res = res.headers
+
+  if (res['content-length'])
+    res.size = +res['content-length']
+
+  if (res['content-md5'])
+    res.md5 = res['content-md5']
+
+  if (res['computed-md5'])
+    res.md5 = res['computed-md5']
+
+  task.result = res
+  if (er) {
+    er.task = task
+    if (task.file) {
+      task.file.status = 'error'
+      task.file.error = er
+      er.file = task.file
+    }
+    if (task.after)
+      task.after(task)
+    else
+      this.emit('error', er)
+  } else {
+    if (task.file && task.status) {
+      task.file.status = task.status
+      this._results[task.file] = res || task.file
+      this._results[task.file].status = task.status
+      this.emit('file', task.file, task.status, res)
+    }
+    if (task.after)
+      task.after(task)
+  }
+  this._process()
 }
 
 Cuttlefish.prototype._sync = function sync() {
   debug('start sync', this._names)
-  if (this._names.length === 0 || this._onlyDelete)
+
+  // Nothing to send, and not deleting, so we're done! hooray!
+  if (this._names.length === 0 && !this._delete)
     return process.nextTick(this._done.bind(this))
 
-  this._names.forEach(function(f) {
-    this._syncFile(this._files[f])
-  }, this)
+  this._startWalk()
 }
 
-Cuttlefish.prototype._syncFile = function syncFile(file) {
-  debug('_syncFile %s', file)
-  // if the manta checksum doesn't match, then call
-  // options.request() to get the file.
-  var remote = this._path + '/' + file
-  this._client.info(remote, this._onInfo.bind(this, file))
+Cuttlefish.prototype._startWalk = function startWalk() {
+  debug('startWalk', this._path)
+  var opt = {
+    parallel: this._concurrency
+  }
+  this._client.ftw(this._path, opt, this._onWalk.bind(this))
 }
 
-Cuttlefish.prototype._onInfo = function(file, er, remote) {
-  debug('info %s', file, er || remote)
+Cuttlefish.prototype._onWalk = function onWalk(er, res) {
+  debug('onWalk', er || 'ok')
+
   if (er && er.statusCode === 404)
-    this._sendFile(file)
+    this._client.mkdir(this._path, this._sendUnsent.bind(this))
   else if (er)
-    this._error(file, er)
+    this.emit('error', er)
+  else {
+    this._walker = res
+    this.emit('walkStart', res)
+    res.on('entry', this._onWalkEntry.bind(this))
+    res.on('end', this._sendUnsent.bind(this))
+  }
+}
+
+Cuttlefish.prototype._onWalkEntry = function onWalkEntry(d) {
+  debug('ftw entry', d)
+  d._path = d.parent + '/' + d.name
+  d._remote = d._path.substr(this._path.length + 1)
+  d.toString = function() { return this._remote }
+  if (d.type === 'directory') {
+    if (this._delete)
+      this._onWalkEntryDir(d)
+  } else
+    this._onWalkEntryObject(d)
+}
+
+Cuttlefish.prototype._onWalkEntryDir = function onWalkEntryDir(d) {
+  debug('onWalkEntryDir', d)
+  // check to see if anything needs this dir to exist.
+  // if not, then kill it.
+  for (var i = 0; i < this._names.length; i++) {
+    if (this._names[i].indexOf(d._remote) === 0) {
+      debug('dir is ok', d._remote)
+      return // needs to be there
+    }
+  }
+  this._pushTask({
+    name: 'rmr',
+    file: d,
+    fn: this._client.rmr.bind(this._client, d._path),
+    after: this._onDelete.bind(this)
+  })
+}
+
+Cuttlefish.prototype._onDelete = function onDelete(task) {
+  debug('onDelete', task)
+  var remote = task.file
+  remote.status = 'delete'
+  this._results[remote._remote] = remote
+  if (task.error && task.error.statusCode !== 404)
+    this.emit('error', task.error)
+  else
+    this.emit('delete', remote._remote, remote)
+}
+
+Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
+  var file = this._files[d._remote]
+  debug('onWalkEntryObject', d, !!file, this._delete)
+  if (!file) {
+    if (this._delete)
+      this._pushTask({
+        fn: this._client.unlink.bind(this._client, d._path),
+        name: 'unlink',
+        file: d,
+        after: this._onDelete.bind(this)
+      })
+  } else {
+    // either a match, or not
+    if (file.size !== null && file.size !== d.size) {
+      debug('size mismatch local=%d remote=%d', file.size, d.size)
+      this._send(file)
+    } else if (file.md5) {
+      debug('have md5, get info', file.md5)
+      this._pushTask({
+        name: 'info',
+        fn: this._client.info.bind(this._client, d._path),
+        after: this._onInfo.bind(this),
+        file: file
+      })
+    } else if (file.size === null) {
+      debug('no size, send anyway', file)
+      this._send(file)
+    } else {
+      debug('match', file, d)
+      this._match(file, d)
+    }
+  }
+}
+
+Cuttlefish.prototype._send = function(file) {
+  debug('send', file)
+  this._pushTask({
+    name: 'sendFile',
+    fn: this._sendFile.bind(this, file),
+    file: file,
+    status: 'sent'
+  })
+}
+
+Cuttlefish.prototype._onInfo = function(task) {
+  var file = task.file
+  var remote = task.result
+  debug('onInfo %s', file, remote)
+  if (task.error && task.error.statusCode === 404)
+    this._send(file)
+  else if (task.error)
+    this.emit('error', task.error)
   else if (remote.md5 === file.md5)
     this._match(file, remote)
   else if (!file.md5 && remote.size === file.size)
     this._match(file, remote)
   else
-    this._sendFile(file)
+    this._send(file)
+}
+
+Cuttlefish.prototype._sendUnsent = function sendUnsent() {
+  debug('sendUnsent')
+  this._names.forEach(sendUnsentForeach, this)
+  this._tasksEnd()
+}
+
+function sendUnsentForeach(f) {
+  debug('-sendUnsent', this._files[f], this._results[f])
+  if (!this._files[f].started)
+    this._send(this._files[f])
 }
 
 Cuttlefish.prototype._match = function(file, remote) {
-  debug('match! %s', file, remote)
+  remote.status = 'match'
+  file.status = 'match'
+  file.started = true
   this._results[file] = remote
+  debug('match', file, remote)
   this.emit('file', file, 'match', remote)
-  this._maybeDone()
-}
-
-Cuttlefish.prototype._error = function(file, error) {
-  debug('error! %s', file, error)
-  this._results[file] = error
-  file.error = error
-  this._firstError = this._firstError || error
-  if (this._strict)
-    this.emit('error', error)
-  this.emit('file', file, 'error', error)
-  this._maybeDone()
-}
-
-Cuttlefish.prototype._sent = function(file, result, x) {
-  debug('sent! %s', file, result.headers)
-  this._results[file] = result.headers
-  this.emit('file', file, 'sent', result.headers)
-  this._maybeDone()
-}
-
-Cuttlefish.prototype._maybeDone = function() {
-  debug('maybe done? %d', this._remaining)
-  if (--this._remaining === 0)
-    this._done()
 }
 
 Cuttlefish.prototype._done = function() {
   debug('done!')
-  if (this._delete)
-    this._deleteExtras()
-  else
-    this.emit('complete', this._firstError, this._results)
+  this.emit('complete', this._firstError, this._results)
 }
 
-Cuttlefish.prototype._sendFile = function(file) {
+Cuttlefish.prototype._sendFile = function(file, cb) {
   debug('_sendFile %s', file)
   // get this file, and then send it once we have it.
-  this._request(file, this._onRequest.bind(this, file))
+  this._request(file, this._onRequest.bind(this, file, cb))
 }
 
-Cuttlefish.prototype._onRequest = function onRequest(file, er, stream) {
+Cuttlefish.prototype._onRequest = function onRequest(file, cb, er, stream) {
   debug('_onRequest %s', file, er || 'ok')
   if (er)
-    this.emit('error', er)
+    cb(er)
   else
-    this._sendFileStream(file, stream)
+    this._sendFileStream(file, stream, cb)
 }
 
-Cuttlefish.prototype._sendFileStream = function(file, stream) {
+Cuttlefish.prototype._sendFileStream = function(file, stream, cb) {
   debug('_sendFileStream %s', file)
   var mpath = this._path + '/' + file
-  stream.on('error', this._error.bind(this, file))
-  this._client.put(mpath, stream, file, this._onSend.bind(this, file))
+  stream.on('error', cb)
+  this._client.put(mpath, stream, file, cb)
 }
-
-Cuttlefish.prototype._onSend = function(file, er, result) {
-  debug('_onSend %s', file, er || result.headers)
-  this._results[file] = er || result.headers
-  if (er)
-    this._error(file, er)
-  else
-    this._sent(file, result)
-}
-
 
 
 // File class
@@ -288,6 +407,7 @@ File.prototype.size = null
 File.prototype.type = null
 File.prototype.name = null
 File.prototype.error = null
+File.prototype.started = false
 
 function canonize(files, headers) {
   return Object.keys(files).map(function(fname) {
