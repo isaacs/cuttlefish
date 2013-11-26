@@ -450,7 +450,7 @@ function canonicalMd5(md5) {
     if (Buffer.isBuffer(md5))
       md5 = md5.toString('base64')
     else if (md5 && md5.match(/^md5-/))
-      md5 = md5.replace(/^md5-/)
+      md5 = md5.replace(/^md5-/, '')
 
     if (md5.length === 32)
       md5 = new Buffer(md5, 'hex').toString('base64')
