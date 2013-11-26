@@ -1,6 +1,6 @@
 {
   "name": "cuttlefish",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A simple lowlevel synchronizing library for Joyent Manta.",
   "main": "cuttlefish.js",
   "dependencies": {
