@@ -123,7 +123,8 @@ fishy.on('complete', function(error, data) {
 ## Options
 
 * `client` {MantaClient object} Required client for accessing Manta
-* `files` {Object} The `{<name>:<details>,...}` hash
+* `files` {Object} The `{<name>:<File>,...}` hash.  See below for
+  the fields that can be specified on each File object.
 * `path` {String} The path on Manta where the stuf gets synced to
 * `request` {Function} Function that gets a stream to send, if
   appropriate
@@ -162,6 +163,13 @@ one of the aliases, it'll be changed to the canonical name.
   `contentType`, `content_type`, `mime-type`, `mime_type`, `mimeType`
 * `headers` Additional headers to pass to the Manta PUT operation.
   Does not check against headers for pre-existing files.
+* `skip` A boolean to say "do not send this file, even if the remote
+  does not have it, or the md5 doesn't match".  This is useful if you
+  want to only remove certain missing files, but not all.  A skipped
+  file will be emitted as a `match` if the remote has a file by that
+  name, without checking length or md5.  If the remote does not have a
+  copy of the file, then it is still not sent, but is not emitted as a
+  match.
 * `name` The key in the `files` hash.  When file objects are cast to a
   string, their `name` field is returned.
 * `mkdirs` Boolean `true`, but only because the file is passed as an

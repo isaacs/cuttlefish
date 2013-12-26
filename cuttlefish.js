@@ -297,7 +297,10 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
       })
   } else if (!this._onlyDelete) {
     // either a match, or not
-    if (file.size !== null && file.size !== d.size) {
+    if (file.skip) {
+      debug('skip file %s', file.name)
+      this._match(file, d)
+    } else if (typeof file.size === 'number' && file.size !== d.size) {
       debug('size mismatch local=%d remote=%d', file.size, d.size)
       this._send(file)
     } else if (file.md5) {
@@ -313,14 +316,14 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
         this._match(file, d)
       else
         this._send(file)
-    } else if (this._getMd5) {
+    } else if (this._getMd5 && !file.skip) {
       this._pushTask({
         name: 'getMd5',
         fn: this._getMd5.bind(this, file),
         file: file,
         after: this._afterGetMd5.bind(this, file, d)
       })
-    } else if (file.size === null) {
+    } else if (typeof file.size !== 'number') {
       debug('no size, send anyway', file)
       this._send(file)
     } else {
@@ -384,7 +387,7 @@ Cuttlefish.prototype._sendUnsent = function sendUnsent() {
 
 function sendUnsentForeach(f) {
   debug('-sendUnsent', this._files[f], this._results[f])
-  if (!this._files[f].started)
+  if (!this._files[f].started && !this._files[f].skip)
     this._send(this._files[f])
 }
 
@@ -459,6 +462,8 @@ function canonicalMd5(md5) {
 }
 
 function File(fname, file, headers) {
+  this.skip = !!file.skip
+
   this.md5 = canonicalMd5(field(file, [
     'md5', 'content-md5', 'contentMd5',
     'content_md5', 'digest',

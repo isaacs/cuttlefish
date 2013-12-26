@@ -305,7 +305,54 @@ test('dry-run test', function(t) {
   })
 })
 
+test('skip test', function(t) {
+  // here, we don't provide length/md5 about one of the files,
+  // but we just accept whatever the remote has for it.
+  // also delete dir/c, since we removed that in the last test.
+  delete files.c
+  files.b = { skip: true }
+  files['dir/b'] = { skip: true }
+
+  // don't send a skip:true file, even if it is not on the remote
+  files.doNotSend = { skip: true }
+
+  var cf = cuttlefish({
+    delete: true,
+    files: files,
+    client: client,
+    request: function(file, cb) {
+      throw new Error('Should not try to load any files: ' + file)
+    },
+    path: mpath
+  })
+
+  var expectMatch = [
+    'b', 'd', 'e', 'f',
+    'dir/b', 'dir/c', 'dir/d', 'dir/e', 'dir/f'
+  ]
+
+  cf.on('delete', function(f) {
+    t.fail('should not delete anything: ' + f)
+  })
+
+  cf.on('send', function(f) {
+    t.fail('should not send anything: ' + f.name)
+  })
+
+  var match = []
+  cf.on('match', function(f) {
+    match.push(f.name)
+  })
+
+  cf.on('complete', function(results) {
+    t.same(match, expectMatch)
+    t.end()
+  })
+})
+
 test('fs only delete extra', function(t) {
+  delete files['dir/b']
+  delete files.b
   var deletedExpect = [ 'b', 'dir/b' ]
 
   var cf = cuttlefish({
