@@ -336,8 +336,8 @@ Cuttlefish.prototype._afterGetMd5 = function afterGetMd5(file, d, task) {
   if (task.error)
     this.emit('error', task.error)
   else {
-    assert(task.result)
-    task.file.md5 = canonicalMd5(task.result)
+    if (task.result)
+      task.file.md5 = canonicalMd5(task.result)
     this._onWalkEntryObject(d)
   }
 }
