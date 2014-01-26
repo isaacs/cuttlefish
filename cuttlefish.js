@@ -316,7 +316,7 @@ Cuttlefish.prototype._onWalkEntryObject = function onWalkEntryObject(d) {
         this._match(file, d)
       else
         this._send(file)
-    } else if (this._getMd5 && !file.skip) {
+    } else if (this._getMd5 && !file.skip && !file.nodigest) {
       this._pushTask({
         name: 'getMd5',
         fn: this._getMd5.bind(this, file),
@@ -338,6 +338,8 @@ Cuttlefish.prototype._afterGetMd5 = function afterGetMd5(file, d, task) {
   else {
     if (task.result)
       task.file.md5 = canonicalMd5(task.result)
+    else
+      task.file.nodigest = true
     this._onWalkEntryObject(d)
   }
 }
